@@ -1,0 +1,9 @@
+[language-server.mdmath-lsp]
+command = "/Users/tim/developer/mdmath-lsp/target/debug/mdmath-lsp"
+
+[[language]]
+name = "markdown"
+language-servers = [
+  "marksman",
+  { name = "mdmath-lsp", only-features = ["hover", "diagnostics", "inlay-hints", "code-action"] }
+]
