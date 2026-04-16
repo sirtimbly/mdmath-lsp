@@ -23,3 +23,14 @@ avg(figures)
 a := 10
 b := 20
 a + b
+
+sheet:
+a := 10
+
+| Item        | Price | qty. | Total         |
+| ----------- | ----- | ---- | ------------- |
+| MacBook Pro | 1999  | 2    | =sum(B, qty)  |
+| iPad        | 999   | 3    | =sum(a, C)    |
+
+sum(Price)
+avg(Total)

@@ -1,20 +1,31 @@
 # mdmath-lsp
 
-Small Rust language server for doing lightweight math inside Markdown in Helix.
+A Markdown calculation LSP for Helix.
 
-`mdmath-lsp` is intentionally narrow. It does not try to be a notebook, spreadsheet, or symbolic algebra system. It watches for a `math:` line in a Markdown document, treats the rest of the file as math statements, and surfaces results through standard LSP features that Helix already supports well: diagnostics, hover, inlay hints, and code actions.
+`mdmath-lsp` gives Markdown files two calculation modes:
+
+- `math:` for freeform expressions, variables, lists, and conversions
+- `sheet:` for spreadsheet-style Markdown tables with formulas and column aggregates
+
+It is intentionally small and deterministic, but it is not just a math highlighter. It is a focused calculation engine for notes, estimates, and lightweight tabular analysis inside ordinary Markdown, surfaced through standard LSP features Helix already supports well: diagnostics, hover, inlay hints, and code actions.
 
 ## What It Does
 
-- Evaluates math statements after a `math:` line
-- Supports arithmetic, variables, lists, and aggregate functions
-- Supports column-style list input for summing or averaging figures
-- Supports a built-in set of unit conversions
+- Supports two first-class Markdown calculation modes: `math:` and `sheet:`
+- Evaluates freeform expressions, variables, list blocks, and unit conversions
+- Evaluates spreadsheet-style Markdown tables with row formulas and column aggregates
+- Supports common spreadsheet functions in both list and table workflows
 - Reports parse and evaluation errors inline in Helix
 
-## Current Syntax
+## Modes
 
 `math:` must appear at the start of a line. Everything before it is ignored.
+
+`math:` can also include the first expression on the same line.
+
+Markers inside fenced code blocks are ignored. After `math:` or `sheet:` is active, fenced code blocks are skipped and inline backticks can be used to escape parts of a line from evaluation.
+
+Use `/math` or `/sheet` on their own line to close the active mode explicitly.
 
 ```md
 Notes above here are ignored.
@@ -23,6 +34,26 @@ math:
 subtotal := 100
 tax := subtotal * 0.07
 subtotal + tax
+/math
+```
+
+```md
+math: 2 + 2
+3 + 3
+```
+
+`sheet:` must also appear at the start of a line. In sheet mode, normal math expressions still work, but Markdown tables gain spreadsheet-like formulas and column aggregation.
+
+```md
+sheet:
+| Item        | Price | qty. | Total         |
+| ----------- | ----- | ---- | ------------- |
+| MacBook Pro | 1999  | 2    | =sum(B, qty)  |
+| iPad        | 999   | 3    | =sum(Price,C) |
+
+sum(Price)
+avg(Total)
+/sheet
 ```
 
 ### Expressions
@@ -47,15 +78,28 @@ b := a * 2
 a + b
 ```
 
-### Aggregate Functions
+### Functions
 
 Supported functions:
 
-- `sum(list)`
-- `avg(list)`
-- `min(list)`
-- `max(list)`
+- `sum(...)`
+- `avg(...)`
+- `min(...)`
+- `max(...)`
 - `len(list)`
+- `count(...)`
+- `product(...)`
+- `median(...)`
+- `abs(number)`
+- `round(number)`
+- `round(number, digits)`
+- `floor(number)`
+- `ceil(number)`
+- `sqrt(number)`
+
+`sum`, `avg`, `min`, `max`, `count`, `product`, and `median` accept either a list or spreadsheet-style arguments such as `sum(B, C)`.
+
+`len` is list-only.
 
 Example:
 
@@ -67,6 +111,9 @@ avg(nums)
 min(nums)
 max(nums)
 len(nums)
+product(nums)
+median(nums)
+round(3.14159, 2)
 ```
 
 ### Column Lists
@@ -111,6 +158,75 @@ sum(prices)
 ```
 
 Internally, a block like `prices:` is treated as a synthetic assignment such as `prices := [98.99, 17.09, 11.55]`.
+
+### Sheet Tables
+
+In `sheet:` mode, Markdown tables can contain formulas in cells that start with `=`.
+
+Rules:
+
+- `B` means the current row's second column, `C` the third, and so on
+- if a header is present, you can also refer to that column by its header name
+- after the table, header names become list variables for the whole column
+- aggregate calls like `sum(Price)` and `avg(Total)` work on both literal and computed cells in that column
+
+Example:
+
+```md
+sheet:
+a := 10
+
+| Item        | Price | qty. | Total         |
+| ----------- | ----- | ---- | ------------- |
+| MacBook Pro | 1999  | 2    | =sum(B, qty)  |
+| iPad        | 999   | 3    | =sum(a, C)    |
+
+sum(Price)
+avg(Total)
+```
+
+Header names are normalized into identifiers. For example, `qty.` becomes `qty` and `Unit Price` becomes `Unit_Price`.
+
+Plain expressions and assignments can also appear in `sheet:` mode outside tables.
+
+### Escapes And Appended Results
+
+Inline backticks escape text from evaluation after a mode is active.
+
+```md
+math:
+a := 10 `comment`
+a + 1
+`sum(prices)`
+```
+
+Fenced code blocks are ignored inside both `math:` and `sheet:` modes.
+
+````md
+math:
+a := 10
+```python
+this is ignored
+```
+a + 1
+````
+
+Math lines can include an appended answer after `=` and the evaluator will ignore that trailing result text.
+
+```md
+math:
+2 + 2 = 4
+subtotal + tax = 107
+```
+
+Sheet formula cells support the same pattern:
+
+```md
+sheet:
+| Item | Price | qty. | Total                |
+| ---- | ----- | ---- | -------------------- |
+| iPad | 999   | 3    | =sum(B, qty) = 1002 |
+```
 
 ### Unit Conversion
 
@@ -229,11 +345,17 @@ See `examples/demo.md` for a working sample.
 Current limitations are intentional:
 
 - `math:` must be at column 0
-- everything after `math:` is treated as math mode
+- `sheet:` must be at column 0
+- `/math` and `/sheet` must be on their own line
+- everything after the most recent `math:` or `sheet:` marker stays in that mode
+- fenced code blocks are ignored in both modes
+- inline backticks escape text from evaluation
+- only `math:` supports an expression on the same marker line
 - assignment uses `:=`, not `=`
-- expressions use `56 * 88`, not `56 * 88 =`
+- appended result text like `2 + 2 = 4` is supported, but a bare trailing `=` like `56 * 88 =` is not
 - list names must be valid identifiers like `prices` or `my_prices`
 - currency prefixes like `$98.99` are not parsed yet
+- sheet formulas only understand the current row plus variables already defined earlier in the document
 - no cross-file references
 - no symbolic algebra
 

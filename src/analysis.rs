@@ -31,10 +31,12 @@ pub fn analyze(text: &str) -> Analysis {
     let mut statements = Vec::with_capacity(sources.len());
 
     for source in &sources {
-        match lang::parse_statement(&source.text) {
+        match lang::parse_statement(&source.analysis_text) {
             Ok(statement) => parsed.push(Some(statement)),
             Err(error) => {
-                diagnostics.push(to_document_diagnostic(source, &error));
+                if source.visible {
+                    diagnostics.push(to_document_diagnostic(source, &error));
+                }
                 parsed.push(None);
             }
         }
@@ -64,9 +66,9 @@ impl Analysis {
     }
 
     pub fn statement_at_offset(&self, offset: usize) -> Option<&StatementAnalysis> {
-        self.statements
-            .iter()
-            .find(|statement| statement.source.display_span.contains(offset))
+        self.statements.iter().find(|statement| {
+            statement.source.visible && statement.source.display_span.contains(offset)
+        })
     }
 }
 
@@ -126,12 +128,18 @@ fn evaluate_scope(
 
         match evaluator.eval_statement(scope_pos) {
             Ok(value) => {
-                statements[global_idx].hint_label = Some(hint_label(statement, &value));
-                statements[global_idx].replacement_text = Some(lang::format_value(&value));
-                statements[global_idx].hover_text =
-                    Some(hover_text(&sources[global_idx].text, statement, &value));
+                if sources[global_idx].visible {
+                    statements[global_idx].hint_label = Some(hint_label(statement, &value));
+                    statements[global_idx].replacement_text = Some(lang::format_value(&value));
+                    statements[global_idx].hover_text =
+                        Some(hover_text(&sources[global_idx].text, statement, &value));
+                }
             }
-            Err(error) => diagnostics.push(to_document_diagnostic(&sources[global_idx], &error)),
+            Err(error) => {
+                if sources[global_idx].visible {
+                    diagnostics.push(to_document_diagnostic(&sources[global_idx], &error));
+                }
+            }
         }
     }
 }
@@ -282,6 +290,19 @@ mod tests {
     }
 
     #[test]
+    fn ignores_inserted_answer_text_in_math_lines() {
+        let analysis = analyze("math:\n2 + 2 = 4");
+        assert!(analysis.diagnostics.is_empty());
+        assert_eq!(labels("math:\n2 + 2 = 4"), vec!["= 4"]);
+    }
+
+    #[test]
+    fn explicit_math_terminator_stops_analysis() {
+        let labels = labels("math:\na := 10\na + 1\n/math\na + 2");
+        assert_eq!(labels, vec!["a = 10", "= 11"]);
+    }
+
+    #[test]
     fn evaluates_variables_in_document_order() {
         let labels = labels("math:\na := 10\nb := a * 2\na + b");
         assert_eq!(labels, vec!["a = 10", "b = 20", "= 30"]);
@@ -307,7 +328,7 @@ mod tests {
 
     #[test]
     fn reports_bad_list_function_arguments() {
-        let analysis = analyze("math:\nsum(3)");
+        let analysis = analyze("math:\nlen(3)");
         assert_eq!(analysis.diagnostics[0].message, "expected list argument");
     }
 
@@ -391,6 +412,29 @@ mod tests {
         assert!(messages
             .iter()
             .any(|message| message.contains("unknown variable `prices`")));
+    }
+
+    #[test]
+    fn evaluates_sheet_row_formulas_and_column_aggregates() {
+        let text = "sheet:\na := 10\n| Item | Price | qty. | Total |\n| ---- | ----- | ---- | ----- |\n| MacBook Pro | 1999 | 2 | =sum(B,qty) |\n| iPad | 999 | 3 | =sum(a,C) |\n\nsum(Price)\navg(Total)";
+        let labels = labels(text);
+        assert_eq!(labels, vec!["a = 10", "= 2001", "= 13", "= 2998", "= 1007"]);
+    }
+
+    #[test]
+    fn ignores_inserted_answer_text_in_sheet_formulas() {
+        let text = "sheet:\n| Item | Price | qty. | Total |\n| ---- | ----- | ---- | ----- |\n| MacBook Pro | 1999 | 2 | =sum(B,qty) = 2001 |";
+        let analysis = analyze(text);
+        assert!(analysis.diagnostics.is_empty());
+        assert_eq!(labels(text), vec!["= 2001"]);
+    }
+
+    #[test]
+    fn explicit_sheet_terminator_stops_column_aggregate_analysis() {
+        let labels = labels(
+            "sheet:\n| Item | Price | qty. | Total |\n| ---- | ----- | ---- | ----- |\n| MacBook Pro | 1999 | 2 | =sum(B,qty) |\n/sheet\nsum(Price)",
+        );
+        assert_eq!(labels, vec!["= 2001"]);
     }
 
     #[test]

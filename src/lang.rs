@@ -256,53 +256,171 @@ fn eval_call(
     span: Span,
     resolver: &mut dyn FnMut(&str, Span) -> Result<Value, LangError>,
 ) -> Result<Value, LangError> {
-    let expect_one_arg = || LangError {
-        span,
-        message: format!("`{name}` expects exactly one argument"),
-    };
-
-    if args.len() != 1 {
-        return Err(expect_one_arg());
-    }
-
-    let value = eval_expr(&args[0], resolver)?;
-    let list = expect_list(value, args[0].span())?;
-
     match name {
-        "sum" => Ok(Value::Number(list.iter().sum())),
+        "sum" => Ok(Value::Number(
+            eval_numeric_args(args, span, resolver)?.iter().sum(),
+        )),
         "avg" => {
-            if list.is_empty() {
+            let values = eval_numeric_args(args, span, resolver)?;
+            if values.is_empty() {
                 return Err(LangError {
                     span,
                     message: "`avg` requires a non-empty list".to_string(),
                 });
             }
-            Ok(Value::Number(list.iter().sum::<f64>() / list.len() as f64))
+            Ok(Value::Number(
+                values.iter().sum::<f64>() / values.len() as f64,
+            ))
         }
-        "min" => list
-            .iter()
-            .copied()
-            .reduce(f64::min)
-            .map(Value::Number)
-            .ok_or_else(|| LangError {
-                span,
-                message: "`min` requires a non-empty list".to_string(),
-            }),
-        "max" => list
-            .iter()
-            .copied()
-            .reduce(f64::max)
-            .map(Value::Number)
-            .ok_or_else(|| LangError {
-                span,
-                message: "`max` requires a non-empty list".to_string(),
-            }),
-        "len" => Ok(Value::Number(list.len() as f64)),
+        "min" => reduce_numeric_args(args, span, resolver, f64::min, "min"),
+        "max" => reduce_numeric_args(args, span, resolver, f64::max, "max"),
+        "len" => eval_single_list_fn(
+            args,
+            span,
+            resolver,
+            |list| Ok(Value::Number(list.len() as f64)),
+            "len",
+        ),
+        "count" => {
+            let values = eval_numeric_args(args, span, resolver)?;
+            Ok(Value::Number(values.len() as f64))
+        }
+        "product" => Ok(Value::Number(
+            eval_numeric_args(args, span, resolver)?
+                .into_iter()
+                .product(),
+        )),
+        "median" => {
+            let mut values = eval_numeric_args(args, span, resolver)?;
+            if values.is_empty() {
+                return Err(LangError {
+                    span,
+                    message: "`median` requires a non-empty list".to_string(),
+                });
+            }
+            values.sort_by(f64::total_cmp);
+            let mid = values.len() / 2;
+            let median = if values.len() % 2 == 0 {
+                (values[mid - 1] + values[mid]) / 2.0
+            } else {
+                values[mid]
+            };
+            Ok(Value::Number(median))
+        }
+        "abs" => eval_unary_number_fn(args, span, resolver, f64::abs, "abs"),
+        "round" => eval_round(args, span, resolver),
+        "floor" => eval_unary_number_fn(args, span, resolver, f64::floor, "floor"),
+        "ceil" => eval_unary_number_fn(args, span, resolver, f64::ceil, "ceil"),
+        "sqrt" => eval_unary_number_fn(args, span, resolver, f64::sqrt, "sqrt"),
         _ => Err(LangError {
             span,
             message: format!("unknown function `{name}`"),
         }),
     }
+}
+
+fn eval_numeric_args(
+    args: &[Expr],
+    span: Span,
+    resolver: &mut dyn FnMut(&str, Span) -> Result<Value, LangError>,
+) -> Result<Vec<f64>, LangError> {
+    if args.is_empty() {
+        return Err(LangError {
+            span,
+            message: "expected at least one argument".to_string(),
+        });
+    }
+
+    if args.len() == 1 {
+        let value = eval_expr(&args[0], resolver)?;
+        return match value {
+            Value::List(items) => Ok(items),
+            other => Ok(vec![expect_number(other, args[0].span())?]),
+        };
+    }
+
+    let mut values = Vec::with_capacity(args.len());
+    for arg in args {
+        values.push(expect_number(eval_expr(arg, resolver)?, arg.span())?);
+    }
+    Ok(values)
+}
+
+fn reduce_numeric_args(
+    args: &[Expr],
+    span: Span,
+    resolver: &mut dyn FnMut(&str, Span) -> Result<Value, LangError>,
+    reducer: fn(f64, f64) -> f64,
+    name: &str,
+) -> Result<Value, LangError> {
+    let values = eval_numeric_args(args, span, resolver)?;
+    values
+        .iter()
+        .copied()
+        .reduce(reducer)
+        .map(Value::Number)
+        .ok_or_else(|| LangError {
+            span,
+            message: format!("`{name}` requires a non-empty list"),
+        })
+}
+
+fn eval_single_list_fn(
+    args: &[Expr],
+    span: Span,
+    resolver: &mut dyn FnMut(&str, Span) -> Result<Value, LangError>,
+    callback: impl FnOnce(Vec<f64>) -> Result<Value, LangError>,
+    name: &str,
+) -> Result<Value, LangError> {
+    if args.len() != 1 {
+        return Err(LangError {
+            span,
+            message: format!("`{name}` expects exactly one argument"),
+        });
+    }
+
+    let value = eval_expr(&args[0], resolver)?;
+    callback(expect_list(value, args[0].span())?)
+}
+
+fn eval_unary_number_fn(
+    args: &[Expr],
+    span: Span,
+    resolver: &mut dyn FnMut(&str, Span) -> Result<Value, LangError>,
+    callback: fn(f64) -> f64,
+    name: &str,
+) -> Result<Value, LangError> {
+    if args.len() != 1 {
+        return Err(LangError {
+            span,
+            message: format!("`{name}` expects exactly one argument"),
+        });
+    }
+
+    let value = expect_number(eval_expr(&args[0], resolver)?, args[0].span())?;
+    Ok(Value::Number(callback(value)))
+}
+
+fn eval_round(
+    args: &[Expr],
+    span: Span,
+    resolver: &mut dyn FnMut(&str, Span) -> Result<Value, LangError>,
+) -> Result<Value, LangError> {
+    if !(1..=2).contains(&args.len()) {
+        return Err(LangError {
+            span,
+            message: "`round` expects one or two arguments".to_string(),
+        });
+    }
+
+    let value = expect_number(eval_expr(&args[0], resolver)?, args[0].span())?;
+    let digits = if args.len() == 2 {
+        expect_number(eval_expr(&args[1], resolver)?, args[1].span())?
+    } else {
+        0.0
+    };
+    let factor = 10f64.powf(digits);
+    Ok(Value::Number((value * factor).round() / factor))
 }
 
 fn expect_number(value: Value, span: Span) -> Result<f64, LangError> {
@@ -934,10 +1052,27 @@ mod tests {
     }
 
     #[test]
+    fn supports_variadic_spreadsheet_style_functions() {
+        assert_eq!(eval("sum(1999, 2)").unwrap(), Value::Number(2001.0));
+        assert_eq!(eval("product(3, 4)").unwrap(), Value::Number(12.0));
+        assert_eq!(eval("count(3, 4, 5)").unwrap(), Value::Number(3.0));
+    }
+
+    #[test]
     fn evaluates_min_max_and_len() {
         assert_eq!(eval("min([3, 1, 2])").unwrap(), Value::Number(1.0));
         assert_eq!(eval("max([3, 1, 2])").unwrap(), Value::Number(3.0));
         assert_eq!(eval("len([3, 1, 2])").unwrap(), Value::Number(3.0));
+    }
+
+    #[test]
+    fn evaluates_additional_spreadsheet_functions() {
+        assert_eq!(eval("median([1, 9, 3])").unwrap(), Value::Number(3.0));
+        assert_eq!(eval("abs(-5)").unwrap(), Value::Number(5.0));
+        assert_eq!(eval("round(3.14159, 2)").unwrap(), Value::Number(3.14));
+        assert_eq!(eval("floor(3.9)").unwrap(), Value::Number(3.0));
+        assert_eq!(eval("ceil(3.1)").unwrap(), Value::Number(4.0));
+        assert_eq!(eval("sqrt(9)").unwrap(), Value::Number(3.0));
     }
 
     #[test]
@@ -972,14 +1107,14 @@ mod tests {
 
     #[test]
     fn reports_unknown_function() {
-        let error = eval("median([1, 2, 3])").unwrap_err();
-        assert_eq!(error.message, "unknown function `median`");
+        let error = eval("mystery([1, 2, 3])").unwrap_err();
+        assert_eq!(error.message, "unknown function `mystery`");
     }
 
     #[test]
     fn reports_wrong_argument_count() {
-        let error = eval("sum([1, 2], [3, 4])").unwrap_err();
-        assert_eq!(error.message, "`sum` expects exactly one argument");
+        let error = eval("len([1, 2], [3, 4])").unwrap_err();
+        assert_eq!(error.message, "`len` expects exactly one argument");
     }
 
     #[test]
