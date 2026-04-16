@@ -9,6 +9,36 @@ A Markdown calculation LSP for Helix.
 
 It is intentionally small and deterministic, but it is not just a math highlighter. It is a focused calculation engine for notes, estimates, and lightweight tabular analysis inside ordinary Markdown, surfaced through standard LSP features Helix already supports well: diagnostics, hover, inlay hints, and code actions.
 
+## Install
+
+Install from this project with Cargo:
+
+```bash
+cargo install --path .
+```
+
+Then add it to Helix:
+
+```toml
+[language-server.mdmath-lsp]
+command = "mdmath-lsp"
+
+[[language]]
+name = "markdown"
+language-servers = [
+  { name = "mdmath-lsp", only-features = ["hover", "diagnostics", "inlay-hints", "code-action"] }
+]
+```
+
+And enable inlay hints in Helix config:
+
+```toml
+[editor.lsp]
+display-inlay-hints = true
+```
+
+If `mdmath-lsp` is not on your `PATH`, use an absolute binary path instead, or make sure Cargo's bin directory such as `~/.cargo/bin` is on your `PATH`.
+
 ## What It Does
 
 - Supports two first-class Markdown calculation modes: `math:` and `sheet:`

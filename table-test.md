@@ -1,7 +1,5 @@
 # Tables are Neat
 
-[[./test.md]]
-
 sheet:
 
 | Item        | Price | qty. | Total                |
@@ -10,6 +8,8 @@ sheet:
 | iPad        | 999   | 3    | =product(B,C)        |
 
 sum(Total)
+
+len(Total)
 
 math:
 
